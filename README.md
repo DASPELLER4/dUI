@@ -1,6 +1,8 @@
 # dUI
 C library for making simple GUIs in the linux TTY
 
+<a href="https://github.com/DASPELLER4/dUI/blob/media/dUI-documentation.pdf">Documentation</a>
+
 # Screenshots
 
 Screenshot taken from tests/mouseTest.c:<br>
