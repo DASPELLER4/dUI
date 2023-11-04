@@ -57,7 +57,8 @@ void deleteButtonElement(button_t *button){
 }
 
 void renderButton(button_t* button){
-	if(button->text->bpp != button->bpp){
+	if(button->text->bpp != button->bpp || button->size != button->text->fontSize){
+		button->text->fontSize = button->size;
 		button->text->bpp = button->bpp;
 		regenerateTextBuffer(button->text);
 	}
