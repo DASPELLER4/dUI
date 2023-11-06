@@ -15,6 +15,8 @@
 #include "button.h"
 #include "text.h"
 #include "mouse.h"
+#include "input.h"
+#include "keyboard.h"
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
@@ -26,13 +28,17 @@ typedef struct{
 	struct fb_fix_screeninfo finfo;
 	struct fb_var_screeninfo vinfo;
 	int bpp;
+	keyboard_t *keyboard;
 	mouse_t *mouse;
 	text_t **text;
 	button_t **buttons;
+	input_t **inputs;
 	int textCount;
 	int buttonCount;
+	int inputCount;
 	int maxTextCount;
 	int maxButtonCount;
+	int maxInputCount;
 	bool derived;
 } screen_t;
 
@@ -41,9 +47,11 @@ screen_t *deriveScreen(screen_t *screen); // facilitates the creation of windows
 void closeScreen(screen_t *screen);
 void addText(text_t* text, screen_t *screen);
 void addButton(button_t* button, screen_t *screen);
+void addInput(input_t* input, screen_t *screen);
 void handleInput(screen_t* screen);
 void renderTextToScreen(text_t *text, screen_t *screen);
 void renderButtonToScreen(button_t *button, screen_t *screen);
+void renderInputToScreen(input_t *input, screen_t *screen);
 void renderMouse(screen_t *screen);
 void clearScreen(screen_t *screen);
 void renderScreen(screen_t *screen);
@@ -67,16 +75,17 @@ screen_t *createScreen(char *fbFile){
 		return NULL;
 	}
 	newScreen->mouse = getMouse();
+	newScreen->keyboard = getKeyboard();
 	newScreen->bpp = newScreen->vinfo.bits_per_pixel/8;
 	newScreen->drawBuffer = (uint8_t*)calloc(newScreen->vinfo.xres*newScreen->vinfo.yres*newScreen->bpp,1);
 	newScreen->mmapFramebuffer = (uint8_t*)mmap(0, newScreen->vinfo.xres*newScreen->vinfo.yres*newScreen->bpp, PROT_READ | PROT_WRITE, MAP_SHARED, newScreen->fbFile, 0);
 	close(newScreen->fbFile);
 	newScreen->maxTextCount = 2;
 	newScreen->text = (text_t**)calloc(newScreen->maxTextCount, sizeof(text_t*));
-	newScreen->textCount = 0;
 	newScreen->maxButtonCount = 2;
 	newScreen->buttons = (button_t**)calloc(newScreen->maxButtonCount, sizeof(button_t*));
-	newScreen->textCount = 0;
+	newScreen->maxInputCount = 2;
+	newScreen->inputs = (input_t**)calloc(newScreen->maxInputCount, sizeof(input_t*));
 	return newScreen;
 }
 
@@ -85,13 +94,14 @@ screen_t *deriveScreen(screen_t *screen){ // facilitates the creation of windows
 	newScreen->derived = true;
 	newScreen->mmapFramebuffer = screen->mmapFramebuffer;
 	newScreen->maxTextCount = 2;
-	newScreen->textCount = 0;
 	newScreen->maxButtonCount = 2;
-	newScreen->textCount = 0;
+	newScreen->maxInputCount = 2;
 	newScreen->text = (text_t**)calloc(newScreen->maxTextCount, sizeof(text_t*));
 	newScreen->buttons = (button_t**)calloc(newScreen->maxButtonCount, sizeof(button_t*));
+	newScreen->inputs = (input_t**)calloc(newScreen->maxInputCount, sizeof(input_t*));
 	newScreen->bpp = screen->bpp;
 	newScreen->mouse = screen->mouse;
+	newScreen->keyboard = screen->keyboard;
 	memcpy(&newScreen->vinfo, &screen->vinfo, sizeof(screen->vinfo));
 	memcpy(&newScreen->finfo, &screen->finfo, sizeof(screen->finfo));
 	newScreen->drawBuffer = (uint8_t*)calloc(newScreen->vinfo.xres*newScreen->vinfo.yres*newScreen->bpp,1);
@@ -109,11 +119,18 @@ void closeScreen(screen_t *screen){
 	for(int i = 0; i < screen->maxButtonCount; i++)
 		if(screen->buttons[i])
 			deleteButtonElement(screen->buttons[i]);
-	if(!screen->derived)
+	for(int i = 0; i < screen->maxInputCount; i++){
+		if(screen->inputs[i]){
+			deleteInputElement(screen->inputs[i]);
+		}
+	}
+	free(screen->inputs);
+	if(!screen->derived){
 		closeMouse(screen->mouse);
-	free(screen->buttons);
-	if(!screen->derived)
+		closeKeyboard(screen->keyboard);
 		munmap(screen->mmapFramebuffer, screen->vinfo.xres*screen->vinfo.yres*screen->bpp);
+	}
+	free(screen->buttons);
 	free(screen);
 	screen = NULL;
 }
@@ -144,8 +161,22 @@ void addButton(button_t* button, screen_t *screen){
 	screen->buttonCount++;
 }
 
+void addInput(input_t* input, screen_t *screen){
+	if(screen->inputCount >= screen->maxInputCount){
+		screen->maxInputCount *= 2;
+		screen->inputs = (input_t**)realloc(screen->inputs, screen->maxInputCount*sizeof(input_t*));
+		for(int i = screen->inputCount; i < screen->maxInputCount; i++)
+			screen->inputs[i] = NULL;
+	}
+	int newInputLocation = -1;
+	while(screen->inputs[++newInputLocation]);
+	screen->inputs[newInputLocation] = input;
+	screen->inputCount++;
+}
+
 void handleInput(screen_t* screen){
 	updateMouse(screen->mouse);
+	updateKeyboard(screen->keyboard);
 	screen->mouse->y = MIN(MAX(0,screen->mouse->y), screen->vinfo.yres-screen->mouse->size);
 	screen->mouse->x = MIN(MAX(0,screen->mouse->x), screen->vinfo.xres-screen->mouse->size);
 	for(int i = 0; i < screen->maxButtonCount; i++){
@@ -161,6 +192,31 @@ void handleInput(screen_t* screen){
 		} else if(screen->buttons[i] && screen->buttons[i]->currBorderColor != regularBorder)
 				resetButton(screen->buttons[i]);
 	}
+	input_t *focused = NULL;
+	for(int i = 0; i < screen->maxInputCount; i++){
+		if(screen->inputs[i] &&
+			screen->inputs[i]->x<=screen->mouse->x &&
+			screen->inputs[i]->x+screen->inputs[i]->text->byteWidth/screen->inputs[i]->text->bpp>=screen->mouse->x &&
+			screen->inputs[i]->y<=screen->mouse->y &&
+			screen->inputs[i]->y+screen->inputs[i]->text->fontSize*8>=screen->mouse->y){
+			if(screen->mouse->justClicked){
+				screen->inputs[i]->focused = true;
+				renderInput(screen->inputs[i]);
+			}
+		} else if(screen->mouse->justClicked && screen->inputs[i] && screen->inputs[i]->focused){
+			screen->inputs[i]->focused = false;
+			renderInput(screen->inputs[i]);
+		}
+	}
+	if(screen->keyboard->keypressed)
+		for(int i = 0; i < screen->maxInputCount; i++){
+			if(screen->inputs[i] && screen->inputs[i]->focused){
+				focused = screen->inputs[i];
+				break;
+			}
+		}
+	if(focused)
+		addCharacterToInput(screen->keyboard->keypressed, focused);
 }
 
 void renderTextToScreen(text_t *text, screen_t *screen){
@@ -205,6 +261,27 @@ void renderButtonToScreen(button_t *button, screen_t *screen){
 	}
 }
 
+void renderInputToScreen(input_t *input, screen_t *screen){
+	if(!input->visible)
+		return;
+	if(input->text->bpp != screen->bpp){
+		input->text->bpp = screen->bpp;
+		regenerateTextBuffer(input->text);
+	}
+	bool rerender = true;
+	for(int i = 0; i < input->text->byteWidth; i++)
+		if(input->text->textbuffer[i]){
+			rerender = false;
+			break;
+		}
+	if(rerender)
+		renderInput(input);
+	for(int y = input->y; y<screen->vinfo.yres && y<input->y+input->text->fontSize*8; y++){
+		int pos = screen->vinfo.xres*screen->bpp*y+MAX(MIN(input->x,screen->vinfo.xres),0)*screen->bpp;
+		memcpy(screen->drawBuffer+pos, input->text->textbuffer+(y-input->y)*input->text->byteWidth, MAX(MIN(input->text->byteWidth, screen->vinfo.xres*screen->bpp-input->x*input->text->bpp), 0));		
+	}
+}
+
 void renderMouse(screen_t *screen){
 	mouse_t *mouse = screen->mouse;
 	char *mouseBuffer = calloc(mouse->size*screen->bpp,1);
@@ -233,6 +310,11 @@ void renderScreen(screen_t *screen){
 	for(int i = 0; i < screen->maxButtonCount; i++){
 		if(screen->buttons[i]){
 			renderButtonToScreen(screen->buttons[i], screen);
+		}
+	}
+	for(int i = 0; i < screen->maxInputCount; i++){
+		if(screen->inputs[i]){
+			renderInputToScreen(screen->inputs[i], screen);
 		}
 	}
 	renderMouse(screen);
