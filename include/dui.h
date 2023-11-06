@@ -6,6 +6,8 @@
 #include "screen.h"
 #include "color_macros.h"
 #include "mouse.h"
+#include "keyboard.h"
+#include "input.h"
 
 #endif
 
