@@ -38,12 +38,6 @@ mouse_t *getMouse(){
 	return newMouse;
 }
 
-int isEventFile(char* fileName){
-	if(strlen(fileName) <= 5 || fileName[0] != 'e' || fileName[1] != 'v' || fileName[2] != 'e' || fileName[3] != 'n' || fileName[4] != 't')
-		return 0;
-	return 1;
-}
-
 void updateMouse(mouse_t *mouse){
 	char data[3];
 	int s = 0;
