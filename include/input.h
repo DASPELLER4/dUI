@@ -82,7 +82,7 @@ void addCharacterToInput(unsigned char c, input_t *input){
 			break;
 		case '\n':
 			if(input->onReturn)
-				input->onReturn;
+				input->onReturn();
 			return;
 			break;
 	}
